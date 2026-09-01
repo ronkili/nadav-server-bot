@@ -1,5 +1,3 @@
-console.log("🚀 Starting bot...");
-
 require("dotenv").config();
 
 const fs = require("fs");
@@ -19,436 +17,243 @@ const {
   ChannelType,
   PermissionFlagsBits,
   Events,
-  AttachmentBuilder,
-  REST,
-  Routes,
-  SlashCommandBuilder
+  AttachmentBuilder
 } = require("discord.js");
 
 const config = require("./config");
 
 const DATA_DIR = path.join(__dirname, "data");
-const MOD_TIMERS_FILE = path.join(DATA_DIR, "mod-timers.json");
+const XP_FILE = path.join(DATA_DIR, "xp.json");
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-function loadJson(filePath, fallback) {
-  if (!fs.existsSync(filePath)) return fallback;
-
+function loadJson(file, fallback) {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch (error) {
-    console.error("❌ JSON load error:", error);
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : fallback;
+  } catch {
     return fallback;
   }
 }
-
-function saveJson(filePath, data) {
-  try {
-    fs.writeFileSync(
-      filePath,
-      JSON.stringify(data, null, 2)
-    );
-  } catch (error) {
-    console.error("❌ JSON save error:", error);
-  }
+function saveJson(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-const modTimers = loadJson(MOD_TIMERS_FILE, {});
-
-
-process.on("unhandledRejection", error => {
-  console.error("❌ Unhandled Rejection:", error);
-});
-
-process.on("uncaughtException", error => {
-  console.error("❌ Uncaught Exception:", error);
-});
-
-console.log("✅ Loaded discord.js");
-console.log("✅ Loaded config.js");
-console.log("🔑 TOKEN exists:", Boolean(process.env.TOKEN));
-
-if (!config.clientId) {
-  console.log("⚠️ clientId חסר ב־config.js");
-}
-
-if (!config.guildId) {
-  console.log("⚠️ guildId חסר ב־config.js");
-}
-
-if (!config.staffRoleId) {
-  console.log("⚠️ staffRoleId חסר ב־config.js");
-}
-
-if (!config.ticketCategoryId) {
-  console.log("⚠️ ticketCategoryId חסר ב־config.js");
-}
-
-if (!config.ticketStaffRoleId) {
-  console.log("⚠️ ticketStaffRoleId חסר ב־config.js");
-}
-
-if (!config.ticketLogsChannelId) {
-  console.log("⚠️ ticketLogsChannelId חסר ב־config.js");
-}
+const xpData = loadJson(XP_FILE, {});
+const xpCooldown = new Map();
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildModeration
+    GatewayIntentBits.MessageContent
   ],
   partials: [Partials.Channel]
 });
 
-function userReasonCommand(name, description) {
-  return new SlashCommandBuilder()
-    .setName(name)
-    .setDescription(description)
-    .addUserOption(option =>
-      option
-        .setName("user")
-        .setDescription("המשתמש")
-        .setRequired(true)
-    )
-    .addStringOption(option =>
-      option
-        .setName("reason")
-        .setDescription("סיבה")
-        .setRequired(false)
-    );
-}
-
-async function registerSlashCommands() {
-  function userReasonCommand(
-    name,
-    description,
-    withDuration = false
-  ) {
-    const command = new SlashCommandBuilder()
-      .setName(name)
-      .setDescription(description)
-      .addUserOption(option =>
-        option
-          .setName("user")
-          .setDescription("המשתמש")
-          .setRequired(true)
-      );
-
-    if (withDuration) {
-      command.addStringOption(option =>
-        option
-          .setName("duration")
-          .setDescription("זמן: 30s / 10m / 2h / 3d")
-          .setRequired(true)
-      );
-    }
-
-    command.addStringOption(option =>
-      option
-        .setName("reason")
-        .setDescription("סיבה")
-        .setRequired(false)
-    );
-
-    return command;
-  }
-
-  const commands = [
-    new SlashCommandBuilder()
-      .setName("ping")
-      .setDescription("בודק אם הבוט עובד"),
-
-    new SlashCommandBuilder()
-      .setName("help")
-      .setDescription("מציג את כל פקודות הבוט"),
-
-    new SlashCommandBuilder()
-      .setName("ticket-panel")
-      .setDescription("שולח פאנל טיקטים")
-      .setDefaultMemberPermissions(
-        PermissionFlagsBits.ManageGuild
-      ),
-
-    new SlashCommandBuilder()
-      .setName("giverole")
-      .setDescription("נותן רול למשתמש")
-      .addUserOption(option =>
-        option
-          .setName("user")
-          .setDescription("בחר משתמש")
-          .setRequired(true)
-      )
-      .addRoleOption(option =>
-        option
-          .setName("role")
-          .setDescription("בחר רול")
-          .setRequired(true)
-      )
-      .setDefaultMemberPermissions(
-        PermissionFlagsBits.ManageRoles
-      ),
-
-    userReasonCommand(
-      "warn",
-      "נותן אזהרה למשתמש"
-    ),
-
-    new SlashCommandBuilder()
-      .setName("timeout")
-      .setDescription("נותן Timeout למשתמש")
-      .addUserOption(option =>
-        option
-          .setName("user")
-          .setDescription("המשתמש")
-          .setRequired(true)
-      )
-      .addIntegerOption(option =>
-        option
-          .setName("minutes")
-          .setDescription("כמה דקות")
-          .setRequired(true)
-          .setMinValue(1)
-          .setMaxValue(40320)
-      )
-      .addStringOption(option =>
-        option
-          .setName("reason")
-          .setDescription("סיבה")
-          .setRequired(false)
-      ),
-
-    userReasonCommand(
-      "kick",
-      "מעיף משתמש"
-    ),
-
-    userReasonCommand(
-      "ban",
-      "נותן באן למשתמש"
-    ),
-
-    new SlashCommandBuilder()
-      .setName("clear")
-      .setDescription("מוחק הודעות")
-      .addIntegerOption(option =>
-        option
-          .setName("amount")
-          .setDescription("כמות")
-          .setRequired(true)
-          .setMinValue(1)
-          .setMaxValue(100)
-      ),
-
-    userReasonCommand(
-      "mute",
-      "נותן Chat Mute למשתמש",
-      true
-    ),
-
-    userReasonCommand(
-      "unmute",
-      "מסיר Chat Mute ממשתמש"
-    ),
-
-    userReasonCommand(
-      "voice-mute",
-      "עושה Voice Mute למשתמש",
-      true
-    ),
-
-    userReasonCommand(
-      "voice-unmute",
-      "מוריד Voice Mute ממשתמש"
-    ),
-
-    userReasonCommand(
-      "voice-deafen",
-      "עושה Voice Deafen למשתמש",
-      true
-    ),
-
-    userReasonCommand(
-      "voice-undeafen",
-      "מוריד Voice Deafen ממשתמש"
-    )
-  ].map(command => command.toJSON());
-
-  const rest = new REST({
-    version: "10"
-  }).setToken(process.env.TOKEN);
-
-  console.log(
-    `🔄 Registering ${commands.length} slash commands...`
-  );
-
-  const registered = await rest.put(
-    Routes.applicationGuildCommands(
-      config.clientId,
-      config.guildId
-    ),
-    {
-      body: commands
-    }
-  );
-
-  console.log(
-    `✅ Registered ${registered.length} slash commands`
-  );
-
-  console.log(
-    registered
-      .map(command => `✅ /${command.name}`)
-      .join("\n")
-  );
-}
-
 function isStaff(member) {
   return Boolean(
-    member?.roles?.cache?.has(config.staffRoleId) ||
-    member?.permissions?.has(PermissionFlagsBits.Administrator)
+    member?.permissions?.has(PermissionFlagsBits.Administrator) ||
+    (config.staffRoleId && member?.roles?.cache?.has(config.staffRoleId))
   );
 }
 
-function isTicketStaff(member) {
+function hasTicketConfig() {
   return Boolean(
-    member?.roles?.cache?.has(config.ticketStaffRoleId) ||
-    member?.permissions?.has(PermissionFlagsBits.Administrator)
+    config.ticketCategoryId &&
+    config.ticketStaffRoleId &&
+    config.ticketLogsChannelId
   );
 }
 
-function getTicketOwnerId(channel) {
-  return channel.topic?.match(/ticketOwner:(\d+)/)?.[1] || null;
+// כמו ב-Sales Bot: רק רול צוות הטיקטים יכול Claim/Close.
+function isTicketStaff(member) {
+  return Boolean(member?.roles?.cache?.has(config.ticketStaffRoleId));
 }
 
-function getTicketClaimedById(channel) {
-  return channel.topic?.match(/claimedBy:(\d+)/)?.[1] || null;
+function levelNeed(level) {
+  return 100 + level * 50;
+}
+
+function getXp(guildId, userId) {
+  xpData[guildId] ??= {};
+  xpData[guildId][userId] ??= { xp: 0, level: 0, total: 0 };
+  return xpData[guildId][userId];
+}
+
+function addXp(guildId, userId, amount) {
+  const data = getXp(guildId, userId);
+  data.xp += amount;
+  data.total += amount;
+  let leveled = false;
+
+  while (data.xp >= levelNeed(data.level)) {
+    data.xp -= levelNeed(data.level);
+    data.level++;
+    leveled = true;
+  }
+
+  saveJson(XP_FILE, xpData);
+  return { ...data, leveled };
+}
+
+function buildHelpRequestEmbed(user, reason, requestId, handler = null) {
+  return new EmbedBuilder()
+    .setColor(handler ? "Green" : "DarkGreen")
+    .setTitle("🚨 בקשת עזרה חדשה")
+    .addFields(
+      { name: "משתמש:", value: `${user}`, inline: false },
+      { name: "סיבה:", value: reason || "לא צוינה סיבה", inline: false },
+      { name: "סטטוס:", value: handler ? "✅ נמצא בטיפול" : "❌ לא נמצא בטיפול", inline: false },
+      { name: "סטטוס טיפול:", value: handler ? `✅ בטיפול על ידי ${handler}` : "❌ אף אחד", inline: false }
+    )
+    .setFooter({ text: `ID: ${requestId}` })
+    .setTimestamp();
+}
+
+// =====================
+// VERIFY — כמו ב-Sales Bot
+// =====================
+
+async function sendVerifyPanel(channel) {
+  const embed = new EmbedBuilder()
+    .setColor("Blue")
+    .setTitle("Verify ✅")
+    .setDescription("לחץ על הכפתור, תקבל מספר, ואז תלחץ על המספר הנכון.");
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("start_verify")
+      .setLabel("Verify")
+      .setStyle(ButtonStyle.Success)
+  );
+
+  return channel.send({ embeds: [embed], components: [row] });
+}
+
+// =====================
+// TICKETS — מבוסס על Sales Bot
+// =====================
+
+const TICKET_TYPES = {
+  complaint: { name: "תלונה על ממבר/חבר צוות", emoji: "⚠️" },
+  question: { name: "שאלה כללית", emoji: "🚨" },
+  giveaway: { name: "זכייה בהגרלה", emoji: "🎁" },
+  general_help: { name: "עזרה כללית", emoji: "🔔" },
+  staff_test: { name: "בחינה לצוות", emoji: "<:Master_Heart:807709273134989324>" },
+  other: { name: "אחר", emoji: "📩" }
+};
+
+function getTicketOwner(channel) {
+  return channel.topic?.match(/ticketOwner:(\d{17,20})/)?.[1] || null;
+}
+
+function getTicketClaimedBy(channel) {
+  return channel.topic?.match(/claimedBy:(\d{17,20})/)?.[1] || null;
 }
 
 function getTicketType(channel) {
   return channel.topic?.match(/ticketType:([^|]+)/)?.[1]?.trim() || "לא ידוע";
 }
 
-async function setTicketClaimedBy(channel, userId) {
-  const ownerId = getTicketOwnerId(channel);
-  const type = getTicketType(channel);
+async function setTicketClaimedBy(channel, userId = null) {
+  const currentTopic = channel.topic || "";
+  const cleanedTopic = currentTopic
+    .replace(/\s*\|\s*claimedBy:\d{17,20}/g, "")
+    .trim();
 
-  await channel.setTopic(
-    `ticketOwner:${ownerId || "unknown"} | ticketType:${type} | claimedBy:${userId || "none"}`
-  ).catch(error => {
-    console.error("❌ Failed to update ticket topic:", error);
-  });
+  const newTopic = userId
+    ? `${cleanedTopic} | claimedBy:${userId}`.slice(0, 1024)
+    : cleanedTopic.slice(0, 1024);
+
+  await channel.setTopic(newTopic).catch(() => {});
 }
 
-function ticketButtons(claimedById = null) {
+function buildTicketButtons(claimedById = null) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("claim_ticket")
+      .setCustomId("claim_sales_ticket")
       .setLabel("Claim Ticket")
       .setEmoji("🙋")
       .setStyle(ButtonStyle.Success)
       .setDisabled(Boolean(claimedById)),
-
     new ButtonBuilder()
-      .setCustomId("release_ticket")
+      .setCustomId("release_sales_ticket")
       .setLabel("Release Ticket")
       .setEmoji("🔓")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(!claimedById),
-
     new ButtonBuilder()
-      .setCustomId("add_user_ticket")
+      .setCustomId("add_user_sales_ticket")
       .setLabel("Add User")
       .setEmoji("➕")
       .setStyle(ButtonStyle.Primary)
       .setDisabled(!claimedById),
-
     new ButtonBuilder()
-      .setCustomId("remove_user_ticket")
+      .setCustomId("remove_user_sales_ticket")
       .setLabel("Remove User")
       .setEmoji("➖")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(!claimedById),
-
     new ButtonBuilder()
-      .setCustomId("close_ticket")
+      .setCustomId("close_sales_ticket")
       .setLabel("Close Ticket")
       .setEmoji("🔒")
       .setStyle(ButtonStyle.Danger)
   );
 }
 
-async function transcript(channel) {
+async function createTicketTranscript(channel) {
   const messages = await channel.messages.fetch({ limit: 100 });
   const sorted = [...messages.values()].sort(
     (a, b) => a.createdTimestamp - b.createdTimestamp
   );
 
-  let text = `Transcript for #${channel.name}\n\n`;
+  let transcript = `Transcript for #${channel.name}\n`;
+  transcript += `Channel ID: ${channel.id}\n`;
+  transcript += `Created At: ${new Date().toLocaleString("he-IL")}\n\n`;
 
   for (const msg of sorted) {
-    text += `[${msg.createdAt.toLocaleString("he-IL")}] ${msg.author.tag}: ${msg.content || "[בלי טקסט]"}\n`;
-
+    transcript += `[${msg.createdAt.toLocaleString("he-IL")}] ${msg.author.tag}: ${msg.content || "[בלי טקסט]"}\n`;
     msg.attachments.forEach(att => {
-      text += `Attachment: ${att.url}\n`;
+      transcript += `Attachment: ${att.url}\n`;
     });
   }
 
-  return new AttachmentBuilder(Buffer.from(text, "utf8"), {
+  return new AttachmentBuilder(Buffer.from(transcript, "utf8"), {
     name: `${channel.name}-transcript.txt`
   });
 }
 
-async function modLog(guild, embed) {
-  if (!config.modLogsChannelId) return;
-
-  const channel = guild.channels.cache.get(config.modLogsChannelId);
-
-  if (channel?.isTextBased()) {
-    await channel.send({ embeds: [embed] }).catch(error => {
-      console.error("❌ Mod log error:", error);
-    });
-  }
-}
-
-async function openTicket(interaction, data) {
-  if (
-    !config.ticketCategoryId ||
-    !config.ticketStaffRoleId ||
-    !config.ticketLogsChannelId
-  ) {
+async function openTicket(interaction, ticketData) {
+  if (!hasTicketConfig()) {
     return interaction.reply({
-      content: "❌ חסרים IDs של מערכת הטיקטים ב־config.js.",
+      content: "❌ חסרים IDs של טיקטים ב־config.js.",
       ephemeral: true
     });
   }
 
-  const existing = interaction.guild.channels.cache.find(ch =>
-    ch.topic?.includes(`ticketOwner:${interaction.user.id}`)
+  const existingChannel = interaction.guild.channels.cache.find(channel =>
+    channel.topic?.includes(`ticketOwner:${interaction.user.id}`)
   );
 
-  if (existing) {
+  if (existingChannel) {
     return interaction.reply({
-      content: `❌ כבר יש לך טיקט פתוח: ${existing}`,
+      content: `❌ כבר יש לך טיקט פתוח: ${existingChannel}`,
       ephemeral: true
     });
   }
 
-  const safe = interaction.user.username
+  const safeName = interaction.user.username
     .toLowerCase()
     .replace(/[^a-z0-9א-ת]/g, "-")
     .slice(0, 20);
 
-  const channel = await interaction.guild.channels.create({
-    name: `ticket-${safe}`,
+  const ticketChannel = await interaction.guild.channels.create({
+    name: `ticket-${safeName}`,
     type: ChannelType.GuildText,
     parent: config.ticketCategoryId,
-    topic: `ticketOwner:${interaction.user.id} | ticketType:${data.name} | claimedBy:none`,
+    topic: `ticketOwner:${interaction.user.id} | ticketType:${ticketData.name}`,
     permissionOverwrites: [
       {
         id: interaction.guild.id,
@@ -474,153 +279,198 @@ async function openTicket(interaction, data) {
     ]
   });
 
-  const embed = new EmbedBuilder()
-    .setColor("Blue")
-    .setTitle(`${data.emoji} טיקט חדש`)
-    .setDescription(
-      `👤 משתמש: ${interaction.user}\n` +
-      `📌 סוג טיקט: **${data.name}**`
-    )
-    .setTimestamp();
+  await ticketChannel.send({
+    content:
+`${ticketData.emoji} **טיקט חדש נפתח**
 
-  await channel.send({
-    content: `<@&${config.ticketStaffRoleId}>`,
-    embeds: [embed],
-    components: [ticketButtons()],
+👤 משתמש: <@${interaction.user.id}>
+📌 סוג טיקט: **${ticketData.name}**
+
+<@&${config.ticketStaffRoleId}>`,
+    components: [buildTicketButtons()],
     allowedMentions: {
+      users: [interaction.user.id],
       roles: [config.ticketStaffRoleId]
     }
   });
 
   return interaction.reply({
-    content: `✅ הטיקט נפתח: ${channel}`,
+    content: `✅ הטיקט שלך נפתח: ${ticketChannel}`,
     ephemeral: true
   });
 }
 
-client.once(Events.ClientReady, async readyClient => {
-  console.log(`✅ Logged in as ${readyClient.user.tag}`);
-  console.log(`✅ Bot ID: ${readyClient.user.id}`);
-  console.log(`✅ Servers: ${readyClient.guilds.cache.size}`);
-
-  try {
-    await registerSlashCommands();
-    await checkModTimers();
-
-    setInterval(() => {
-      checkModTimers().catch(error => {
-        console.error("❌ Timer check error:", error);
-      });
-    }, 15 * 1000);
-  } catch (error) {
-    console.error(
-      "❌ Slash command registration failed:",
-      error
-    );
-  }
+client.once(Events.ClientReady, readyClient => {
+  console.log(`✅ Nadav Server Bot logged in as ${readyClient.user.tag}`);
 });
 
-
-function buildHelpEmbed() {
-  return new EmbedBuilder()
-    .setColor("Blue")
-    .setTitle("📚 Help")
-    .setDescription(
-      [
-        "**בדיקת הבוט**",
-        "`/ping` — בודק אם הבוט עובד",
-        "",
-        "**טיקטים**",
-        "`/ticket-panel` — שולח פאנל טיקטים",
-        "",
-        "**רולים**",
-        "`/giverole user role` — נותן רול למשתמש",
-        "",
-        "**מודרציה**",
-        "`/warn` — אזהרה",
-        "`/timeout` — Timeout",
-        "`/kick` — Kick",
-        "`/ban` — Ban",
-        "`/clear` — מחיקת הודעות",
-        "",
-        "**Chat Mute**",
-        "`/mute user duration reason` — Chat Mute זמני",
-        "`/unmute user reason` — מסיר Chat Mute",
-        "",
-        "**Voice**",
-        "`/voice-mute user duration reason` — Voice Mute זמני",
-        "`/voice-unmute user reason` — מסיר Voice Mute",
-        "`/voice-deafen user duration reason` — Voice Deafen זמני",
-        "`/voice-undeafen user reason` — מסיר Voice Deafen",
-        "",
-        "**זמנים נתמכים**",
-        "`30s` / `10m` / `2h` / `3d`",
-        "",
-        `גם \`${config.prefix || "!"}h\` מציג את ההודעה הזאת.`
-      ].join("\n")
-    )
-    .setTimestamp();
-}
+// =====================
+// PREFIX + XP
+// =====================
 
 client.on(Events.MessageCreate, async message => {
   try {
-    if (!message.guild) return;
-    if (message.author.bot) return;
+    if (!message.guild || message.author.bot) return;
 
-    const prefix = config.prefix || "!";
-    const content = String(message.content || "")
-      .trim()
-      .toLowerCase();
+    const key = `${message.guild.id}:${message.author.id}`;
+    const last = xpCooldown.get(key) || 0;
 
-    if (content !== `${prefix}h`.toLowerCase()) {
-      return;
+    if (Date.now() - last >= 60000) {
+      xpCooldown.set(key, Date.now());
+      const result = addXp(
+        message.guild.id,
+        message.author.id,
+        15 + Math.floor(Math.random() * 11)
+      );
+
+      if (result.leveled) {
+        await message.channel.send(
+          `🎉 ${message.author}, עלית לרמה **${result.level}**!`
+        ).catch(() => {});
+      }
     }
 
-    return message.reply({
-      embeds: [buildHelpEmbed()]
-    });
+    const prefix = config.prefix || "!";
+    if (!message.content.startsWith(prefix)) return;
+
+    const args = message.content.slice(prefix.length).trim().split(/\s+/);
+    const command = args.shift()?.toLowerCase();
+
+    if (command === "h" || command === "help") {
+      const reason = args.join(" ").trim() || "לא צוינה סיבה";
+      const requestId = Date.now().toString();
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`take_help_request:${message.author.id}:${requestId}`)
+          .setLabel("בטיפול")
+          .setStyle(ButtonStyle.Primary)
+      );
+
+      return message.channel.send({
+        content: config.staffRoleId ? `<@&${config.staffRoleId}>` : undefined,
+        embeds: [buildHelpRequestEmbed(message.author, reason, requestId)],
+        components: [row],
+        allowedMentions: config.staffRoleId ? { roles: [config.staffRoleId] } : undefined
+      });
+    }
+
+    if (command === "rank") {
+      const user = message.mentions.users.first() || message.author;
+      const data = getXp(message.guild.id, user.id);
+
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor("Gold")
+            .setTitle(`⭐ Rank — ${user.username}`)
+            .setThumbnail(user.displayAvatarURL())
+            .addFields(
+              { name: "Level", value: `${data.level}`, inline: true },
+              { name: "XP", value: `${data.xp}/${levelNeed(data.level)}`, inline: true },
+              { name: "Total XP", value: `${data.total}`, inline: true }
+            )
+        ]
+      });
+    }
+
+    if (command === "top") {
+      const top = Object.entries(xpData[message.guild.id] || {})
+        .sort((a, b) => b[1].total - a[1].total)
+        .slice(0, 10);
+
+      return message.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor("Gold")
+            .setTitle("🏆 XP Leaderboard")
+            .setDescription(
+              top.length
+                ? top.map(([id, d], i) =>
+                    `**${i + 1}.** <@${id}> — Level **${d.level}** | ${d.total} XP`
+                  ).join("\n")
+                : "אין עדיין נתוני XP."
+            )
+        ]
+      });
+    }
   } catch (error) {
-    console.error("❌ !h error:", error);
+    console.error("❌ Message error:", error);
   }
 });
+
+// =====================
+// INTERACTIONS
+// =====================
 
 client.on(Events.InteractionCreate, async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "ping") {
+        return interaction.reply({ content: "Pong ✅", ephemeral: true });
+      }
+
+      if (interaction.commandName === "verify-panel") {
+        if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+          return interaction.reply({ content: "❌ אין לך גישה.", ephemeral: true });
+        }
+
+        await sendVerifyPanel(interaction.channel);
         return interaction.reply({
-          content: `🏓 Pong! ${client.ws.ping}ms`,
+          content: "שלחתי פאנל Verify ✅",
           ephemeral: true
         });
       }
 
-      if (interaction.commandName === "help") {
+      if (interaction.commandName === "ticket-panel") {
+        if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+          return interaction.reply({ content: "❌ אין לך גישה.", ephemeral: true });
+        }
+
+        const embed = new EmbedBuilder()
+          .setColor("Blue")
+          .setTitle("🎫 Tickets")
+          .setDescription("לחץ על הכפתור כדי לבחור סוג טיקט.");
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("open_ticket_select")
+            .setLabel("בחר סוג טיקט")
+            .setEmoji("🎫")
+            .setStyle(ButtonStyle.Primary)
+        );
+
+        await interaction.channel.send({
+          embeds: [embed],
+          components: [row]
+        });
+
         return interaction.reply({
-          embeds: [buildHelpEmbed()],
+          content: "✅ פאנל הטיקטים נשלח.",
           ephemeral: true
         });
       }
 
+      // =====================
+      // GIVE ROLE
+      // =====================
       if (interaction.commandName === "giverole") {
-        if (
-          !interaction.member.permissions.has(
-            PermissionFlagsBits.ManageRoles
-          ) &&
-          !interaction.member.permissions.has(
-            PermissionFlagsBits.Administrator
-          )
-        ) {
+        if (!interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
           return interaction.reply({
-            content: "❌ אין לך הרשאה לתת רולים.",
+            content: "❌ אין לך הרשאת Manage Roles.",
             ephemeral: true
           });
         }
 
-        const user = interaction.options.getUser("user");
-        const role = interaction.options.getRole("role");
+        const user = interaction.options.getUser("user", true);
+        const role = interaction.options.getRole("role", true);
 
         const member = await interaction.guild.members
           .fetch(user.id)
+          .catch(() => null);
+
+        const botMember = await interaction.guild.members
+          .fetchMe()
           .catch(() => null);
 
         if (!member) {
@@ -630,13 +480,14 @@ client.on(Events.InteractionCreate, async interaction => {
           });
         }
 
-        const botMember = interaction.guild.members.me;
+        if (!botMember) {
+          return interaction.reply({
+            content: "❌ לא הצלחתי לבדוק את ההרשאות של הבוט.",
+            ephemeral: true
+          });
+        }
 
-        if (
-          !botMember?.permissions.has(
-            PermissionFlagsBits.ManageRoles
-          )
-        ) {
+        if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
           return interaction.reply({
             content: "❌ לבוט אין הרשאת Manage Roles.",
             ephemeral: true
@@ -645,38 +496,36 @@ client.on(Events.InteractionCreate, async interaction => {
 
         if (role.id === interaction.guild.id) {
           return interaction.reply({
-            content: "❌ אי אפשר לתת את רול @everyone.",
+            content: "❌ אי אפשר לתת את הרול @everyone.",
             ephemeral: true
           });
         }
 
         if (role.managed) {
           return interaction.reply({
-            content:
-              "❌ אי אפשר לתת את הרול הזה כי הוא מנוהל על ידי בוט או אינטגרציה.",
+            content: "❌ אי אפשר לתת רול שמנוהל על ידי בוט או אינטגרציה.",
             ephemeral: true
           });
         }
 
         if (role.position >= botMember.roles.highest.position) {
           return interaction.reply({
-            content:
-              "❌ הרול הזה גבוה מדי. שים את הרול של הבוט מעליו בהגדרות השרת.",
+            content: "❌ הרול הזה גבוה מדי. רול הבוט חייב להיות מעליו.",
             ephemeral: true
           });
         }
 
-        const executorIsAdmin = interaction.member.permissions.has(
-          PermissionFlagsBits.Administrator
-        );
+        const executorMember = await interaction.guild.members
+          .fetch(interaction.user.id)
+          .catch(() => null);
 
         if (
-          !executorIsAdmin &&
-          role.position >= interaction.member.roles.highest.position
+          executorMember &&
+          !executorMember.permissions.has(PermissionFlagsBits.Administrator) &&
+          role.position >= executorMember.roles.highest.position
         ) {
           return interaction.reply({
-            content:
-              "❌ אי אפשר לתת רול ששווה או גבוה מהרול הגבוה ביותר שלך.",
+            content: "❌ אי אפשר לתת רול ששווה או גבוה מהרול הגבוה ביותר שלך.",
             ephemeral: true
           });
         }
@@ -693,825 +542,405 @@ client.on(Events.InteractionCreate, async interaction => {
           `Role given by ${interaction.user.tag}`
         );
 
-        await modLog(
-          interaction.guild,
-          new EmbedBuilder()
-            .setColor("Green")
-            .setTitle("🎭 Role Added")
-            .addFields(
-              { name: "משתמש", value: `${user}` },
-              { name: "רול", value: `${role}` },
-              { name: "צוות", value: `${interaction.user}` }
-            )
-            .setTimestamp()
-        );
-
         return interaction.reply({
-          content: `✅ נתתי ל־${user} את הרול ${role}.`,
-          ephemeral: true
-        });
-      }
-
-      if (interaction.commandName === "ticket-panel") {
-        if (!isStaff(interaction.member)) {
-          return interaction.reply({
-            content: "❌ אין לך גישה.",
-            ephemeral: true
-          });
-        }
-
-        const menu = new StringSelectMenuBuilder()
-          .setCustomId("ticket_type_select")
-          .setPlaceholder("בחר סוג טיקט")
-          .addOptions(
-            new StringSelectMenuOptionBuilder()
-              .setLabel("זכייה בהגרלה")
-              .setEmoji("🎉")
-              .setValue("giveaway"),
-
-            new StringSelectMenuOptionBuilder()
-              .setLabel("זכייה במלך אמר")
-              .setEmoji("👑")
-              .setValue("king_says"),
-
-            new StringSelectMenuOptionBuilder()
-              .setLabel("דיווח על שחקנים")
-              .setEmoji("❗")
-              .setValue("report"),
-
-            new StringSelectMenuOptionBuilder()
-              .setLabel("בחינה לשוטר ואבטחה")
-              .setEmoji("👮")
-              .setValue("police")
-          );
-
-        await interaction.channel.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor("Blue")
-              .setTitle("🎫 Tickets")
-              .setDescription("בחר סוג טיקט.")
-          ],
-          components: [
-            new ActionRowBuilder().addComponents(menu)
-          ]
-        });
-
-        return interaction.reply({
-          content: "✅ נשלח.",
-          ephemeral: true
-        });
-      }
-
-      if (
-        [
-          "warn",
-          "timeout",
-          "kick",
-          "ban",
-          "clear",
-          "mute",
-          "unmute",
-          "voice-mute",
-          "voice-unmute",
-          "voice-deafen",
-          "voice-undeafen"
-        ].includes(interaction.commandName)
-      ) {
-        if (!isStaff(interaction.member)) {
-          return interaction.reply({
-            content: "❌ אין לך גישה.",
-            ephemeral: true
-          });
-        }
-      }
-
-      if (
-        ["mute", "unmute"].includes(interaction.commandName)
-      ) {
-        if (!isStaff(interaction.member)) {
-          return interaction.reply({
-            content: "❌ אין לך גישה.",
-            ephemeral: true
-          });
-        }
-
-        if (!config.muteRoleId) {
-          return interaction.reply({
-            content: "❌ חסר muteRoleId ב־config.js.",
-            ephemeral: true
-          });
-        }
-
-        const user = interaction.options.getUser("user");
-        const reason =
-          interaction.options.getString("reason") ||
-          "לא צוינה סיבה";
-
-        const member = await interaction.guild.members
-          .fetch(user.id)
-          .catch(() => null);
-
-        if (!member) {
-          return interaction.reply({
-            content: "❌ המשתמש לא נמצא בשרת.",
-            ephemeral: true
-          });
-        }
-
-        const muteRole = await interaction.guild.roles
-          .fetch(config.muteRoleId)
-          .catch(() => null);
-
-        if (!muteRole) {
-          return interaction.reply({
-            content: "❌ לא מצאתי את רול ה־Chat Mute.",
-            ephemeral: true
-          });
-        }
-
-        if (interaction.commandName === "mute") {
-          const durationText =
-            interaction.options.getString("duration");
-          const duration = parseDuration(durationText);
-
-          if (!duration) {
-            return interaction.reply({
-              content:
-                "❌ זמן לא תקין. השתמש ב־30s, 10m, 2h או 3d. " +
-                "המינימום 10 שניות והמקסימום 30 ימים.",
-              ephemeral: true
-            });
-          }
-
-          await member.roles.add(
-            muteRole,
-            `${reason} | by ${interaction.user.tag}`
-          );
-
-          addModTimer({
-            guildId: interaction.guild.id,
-            userId: user.id,
-            type: "chat-mute",
-            expiresAt: Date.now() + duration,
-            reason,
-            moderatorId: interaction.user.id
-          });
-
-          await modLog(
-            interaction.guild,
-            new EmbedBuilder()
-              .setColor("Orange")
-              .setTitle("🔇 Chat Mute")
-              .addFields(
-                { name: "משתמש", value: `${user}` },
-                { name: "זמן", value: formatDuration(duration) },
-                { name: "צוות", value: `${interaction.user}` },
-                { name: "סיבה", value: reason }
-              )
-              .setTimestamp()
-          );
-
-          return interaction.reply({
-            content:
-              `✅ ${user} קיבל Chat Mute ל־**${formatDuration(duration)}**.`,
-            ephemeral: true
-          });
-        }
-
-        await member.roles.remove(
-          muteRole,
-          `${reason} | by ${interaction.user.tag}`
-        );
-
-        removeModTimer(
-          interaction.guild.id,
-          user.id,
-          "chat-mute"
-        );
-
-        await modLog(
-          interaction.guild,
-          new EmbedBuilder()
-            .setColor("Green")
-            .setTitle("🔊 Chat Unmute")
-            .addFields(
-              { name: "משתמש", value: `${user}` },
-              { name: "צוות", value: `${interaction.user}` },
-              { name: "סיבה", value: reason }
-            )
-            .setTimestamp()
-        );
-
-        return interaction.reply({
-          content: `✅ ה־Chat Mute הוסר מ־${user}.`,
-          ephemeral: true
-        });
-      }
-
-      if (
-        [
-          "voice-mute",
-          "voice-unmute",
-          "voice-deafen",
-          "voice-undeafen"
-        ].includes(interaction.commandName)
-      ) {
-        if (!isStaff(interaction.member)) {
-          return interaction.reply({
-            content: "❌ אין לך גישה.",
-            ephemeral: true
-          });
-        }
-
-        const user = interaction.options.getUser("user");
-        const reason =
-          interaction.options.getString("reason") ||
-          "לא צוינה סיבה";
-
-        const member = await interaction.guild.members
-          .fetch(user.id)
-          .catch(() => null);
-
-        if (!member) {
-          return interaction.reply({
-            content: "❌ המשתמש לא נמצא בשרת.",
-            ephemeral: true
-          });
-        }
-
-        if (!member.voice.channel) {
-          return interaction.reply({
-            content: "❌ המשתמש לא נמצא כרגע ב־Voice.",
-            ephemeral: true
-          });
-        }
-
-        const action = interaction.commandName;
-
-        if (
-          action === "voice-mute" ||
-          action === "voice-deafen"
-        ) {
-          const durationText =
-            interaction.options.getString("duration");
-          const duration = parseDuration(durationText);
-
-          if (!duration) {
-            return interaction.reply({
-              content:
-                "❌ זמן לא תקין. השתמש ב־30s, 10m, 2h או 3d. " +
-                "המינימום 10 שניות והמקסימום 30 ימים.",
-              ephemeral: true
-            });
-          }
-
-          if (action === "voice-mute") {
-            await member.voice.setMute(
-              true,
-              `${reason} | by ${interaction.user.tag}`
-            );
-
-            addModTimer({
-              guildId: interaction.guild.id,
-              userId: user.id,
-              type: "voice-mute",
-              expiresAt: Date.now() + duration,
-              reason,
-              moderatorId: interaction.user.id
-            });
-
-            await modLog(
-              interaction.guild,
-              new EmbedBuilder()
-                .setColor("Orange")
-                .setTitle("🔇 Voice Mute")
-                .addFields(
-                  { name: "משתמש", value: `${user}` },
-                  { name: "זמן", value: formatDuration(duration) },
-                  { name: "צוות", value: `${interaction.user}` },
-                  { name: "סיבה", value: reason }
-                )
-                .setTimestamp()
-            );
-
-            return interaction.reply({
-              content:
-                `✅ ${user} קיבל Voice Mute ל־**${formatDuration(duration)}**.`,
-              ephemeral: true
-            });
-          }
-
-          await member.voice.setDeaf(
-            true,
-            `${reason} | by ${interaction.user.tag}`
-          );
-
-          addModTimer({
-            guildId: interaction.guild.id,
-            userId: user.id,
-            type: "voice-deafen",
-            expiresAt: Date.now() + duration,
-            reason,
-            moderatorId: interaction.user.id
-          });
-
-          await modLog(
-            interaction.guild,
-            new EmbedBuilder()
-              .setColor("DarkOrange")
-              .setTitle("🎧 Voice Deafen")
-              .addFields(
-                { name: "משתמש", value: `${user}` },
-                { name: "זמן", value: formatDuration(duration) },
-                { name: "צוות", value: `${interaction.user}` },
-                { name: "סיבה", value: reason }
-              )
-              .setTimestamp()
-          );
-
-          return interaction.reply({
-            content:
-              `✅ ${user} קיבל Voice Deafen ל־**${formatDuration(duration)}**.`,
-            ephemeral: true
-          });
-        }
-
-        if (action === "voice-unmute") {
-          await member.voice.setMute(
-            false,
-            `${reason} | by ${interaction.user.tag}`
-          );
-
-          removeModTimer(
-            interaction.guild.id,
-            user.id,
-            "voice-mute"
-          );
-
-          return interaction.reply({
-            content: `✅ ה־Voice Mute הוסר מ־${user}.`,
-            ephemeral: true
-          });
-        }
-
-        await member.voice.setDeaf(
-          false,
-          `${reason} | by ${interaction.user.tag}`
-        );
-
-        removeModTimer(
-          interaction.guild.id,
-          user.id,
-          "voice-deafen"
-        );
-
-        return interaction.reply({
-          content: `✅ ה־Voice Deafen הוסר מ־${user}.`,
-          ephemeral: true
-        });
-      }
-
-      if (interaction.commandName === "warn") {
-        const user = interaction.options.getUser("user");
-        const reason =
-          interaction.options.getString("reason") ||
-          "לא צוינה סיבה";
-
-        await user.send(
-          `⚠️ קיבלת אזהרה בשרת **${interaction.guild.name}**.\n` +
-          `סיבה: ${reason}`
-        ).catch(() => {});
-
-        await modLog(
-          interaction.guild,
-          new EmbedBuilder()
-            .setColor("Yellow")
-            .setTitle("⚠️ Warn")
-            .addFields(
-              { name: "משתמש", value: `${user}` },
-              { name: "צוות", value: `${interaction.user}` },
-              { name: "סיבה", value: reason }
-            )
-            .setTimestamp()
-        );
-
-        return interaction.reply({
-          content: `✅ ${user} קיבל אזהרה.`,
-          ephemeral: true
-        });
-      }
-
-      if (interaction.commandName === "timeout") {
-        const user = interaction.options.getUser("user");
-        const minutes =
-          interaction.options.getInteger("minutes");
-        const reason =
-          interaction.options.getString("reason") ||
-          "לא צוינה סיבה";
-
-        const member = await interaction.guild.members
-          .fetch(user.id)
-          .catch(() => null);
-
-        if (!member?.moderatable) {
-          return interaction.reply({
-            content:
-              "❌ אי אפשר לעשות Timeout למשתמש הזה.",
-            ephemeral: true
-          });
-        }
-
-        await member.timeout(
-          minutes * 60000,
-          `${reason} | by ${interaction.user.tag}`
-        );
-
-        await modLog(
-          interaction.guild,
-          new EmbedBuilder()
-            .setColor("Orange")
-            .setTitle("⏳ Timeout")
-            .addFields(
-              { name: "משתמש", value: `${user}` },
-              { name: "זמן", value: `${minutes} דקות` },
-              { name: "צוות", value: `${interaction.user}` },
-              { name: "סיבה", value: reason }
-            )
-            .setTimestamp()
-        );
-
-        return interaction.reply({
-          content:
-            `✅ ${user} קיבל Timeout ל־${minutes} דקות.`,
-          ephemeral: true
-        });
-      }
-
-      if (interaction.commandName === "kick") {
-        const user = interaction.options.getUser("user");
-        const reason =
-          interaction.options.getString("reason") ||
-          "לא צוינה סיבה";
-
-        const member = await interaction.guild.members
-          .fetch(user.id)
-          .catch(() => null);
-
-        if (!member?.kickable) {
-          return interaction.reply({
-            content: "❌ אי אפשר להעיף את המשתמש.",
-            ephemeral: true
-          });
-        }
-
-        await member.kick(
-          `${reason} | by ${interaction.user.tag}`
-        );
-
-        await modLog(
-          interaction.guild,
-          new EmbedBuilder()
-            .setColor("Red")
-            .setTitle("👢 Kick")
-            .addFields(
-              { name: "משתמש", value: `${user.tag}` },
-              { name: "צוות", value: `${interaction.user}` },
-              { name: "סיבה", value: reason }
-            )
-            .setTimestamp()
-        );
-
-        return interaction.reply({
-          content: `✅ ${user.tag} הועף.`,
-          ephemeral: true
-        });
-      }
-
-      if (interaction.commandName === "ban") {
-        const user = interaction.options.getUser("user");
-        const reason =
-          interaction.options.getString("reason") ||
-          "לא צוינה סיבה";
-
-        await interaction.guild.members.ban(user.id, {
-          reason:
-            `${reason} | by ${interaction.user.tag}`
-        });
-
-        await modLog(
-          interaction.guild,
-          new EmbedBuilder()
-            .setColor("DarkRed")
-            .setTitle("🔨 Ban")
-            .addFields(
-              { name: "משתמש", value: `${user.tag}` },
-              { name: "צוות", value: `${interaction.user}` },
-              { name: "סיבה", value: reason }
-            )
-            .setTimestamp()
-        );
-
-        return interaction.reply({
-          content: `✅ ${user.tag} קיבל באן.`,
-          ephemeral: true
-        });
-      }
-
-      if (interaction.commandName === "clear") {
-        const amount =
-          interaction.options.getInteger("amount");
-
-        const deleted =
-          await interaction.channel.bulkDelete(amount, true);
-
-        return interaction.reply({
-          content:
-            `✅ נמחקו ${deleted.size} הודעות.`,
+          content: `✅ ${user} קיבל את הרול ${role}.`,
           ephemeral: true
         });
       }
     }
 
-    if (
-      interaction.isStringSelectMenu() &&
-      interaction.customId === "ticket_type_select"
-    ) {
-      const types = {
-        giveaway: {
-          name: "זכייה בהגרלה",
-          emoji: "🎉"
-        },
-        king_says: {
-          name: "זכייה במלך אמר",
-          emoji: "👑"
-        },
-        report: {
-          name: "דיווח על שחקנים",
-          emoji: "❗"
-        },
-        police: {
-          name: "בחינה לשוטר ואבטחה",
-          emoji: "👮"
-        }
-      };
-
-      return openTicket(
-        interaction,
-        types[interaction.values[0]]
-      );
-    }
-
-    if (interaction.isButton()) {
-      if (interaction.customId === "claim_ticket") {
-        if (!isTicketStaff(interaction.member)) {
-          return interaction.reply({
-            content:
-              "❌ רק צוות יכול לקחת טיקט.",
-            ephemeral: true
-          });
-        }
-
-        const claimed =
-          getTicketClaimedById(interaction.channel);
-
-        if (claimed && claimed !== "none") {
-          return interaction.reply({
-            content:
-              `❌ הטיקט כבר נלקח על ידי <@${claimed}>.`,
-            ephemeral: true
-          });
-        }
-
-        await setTicketClaimedBy(
-          interaction.channel,
-          interaction.user.id
-        );
-
-        return interaction.update({
-          components: [
-            ticketButtons(interaction.user.id)
-          ]
-        });
-      }
-
-      if (interaction.customId === "release_ticket") {
-        const claimed =
-          getTicketClaimedById(interaction.channel);
-
-        if (claimed !== interaction.user.id) {
-          return interaction.reply({
-            content:
-              "❌ רק מי שלקח את הטיקט יכול לשחרר אותו.",
-            ephemeral: true
-          });
-        }
-
-        await setTicketClaimedBy(
-          interaction.channel,
-          null
-        );
-
-        return interaction.update({
-          components: [ticketButtons()]
-        });
-      }
-
-      if (interaction.customId === "add_user_ticket") {
-        const claimed =
-          getTicketClaimedById(interaction.channel);
-
-        if (claimed !== interaction.user.id) {
-          return interaction.reply({
-            content:
-              "❌ רק מי שלקח את הטיקט יכול להוסיף משתמש.",
-            ephemeral: true
-          });
-        }
-
-        const menu = new UserSelectMenuBuilder()
-          .setCustomId("ticket_add_user_select")
-          .setPlaceholder("בחר משתמש להוספה");
-
-        return interaction.reply({
-          content: "בחר משתמש:",
-          components: [
-            new ActionRowBuilder().addComponents(menu)
-          ],
-          ephemeral: true
-        });
-      }
-
-      if (interaction.customId === "remove_user_ticket") {
-        const claimed =
-          getTicketClaimedById(interaction.channel);
-
-        if (claimed !== interaction.user.id) {
-          return interaction.reply({
-            content:
-              "❌ רק מי שלקח את הטיקט יכול להסיר משתמש.",
-            ephemeral: true
-          });
-        }
-
-        const menu = new UserSelectMenuBuilder()
-          .setCustomId("ticket_remove_user_select")
-          .setPlaceholder("בחר משתמש להסרה");
-
-        return interaction.reply({
-          content: "בחר משתמש:",
-          components: [
-            new ActionRowBuilder().addComponents(menu)
-          ],
-          ephemeral: true
-        });
-      }
-
-      if (interaction.customId === "close_ticket") {
-        if (!isTicketStaff(interaction.member)) {
-          return interaction.reply({
-            content:
-              "❌ רק צוות יכול לסגור טיקט.",
-            ephemeral: true
-          });
-        }
-
-        const logs =
-          interaction.guild.channels.cache.get(
-            config.ticketLogsChannelId
-          );
-
-        const file =
-          await transcript(interaction.channel)
-            .catch(() => null);
-
-        if (logs?.isTextBased()) {
-          await logs.send({
-            content:
-              `🔒 טיקט נסגר\n` +
-              `🎫 ${interaction.channel.name}\n` +
-              `👤 על ידי ${interaction.user}`,
-            files: file ? [file] : []
-          }).catch(() => {});
-        }
-
-        await interaction.reply(
-          "🔒 הטיקט ייסגר בעוד 5 שניות..."
-        );
-
-        setTimeout(() => {
-          interaction.channel.delete().catch(() => {});
-        }, 5000);
-
-        return;
-      }
+    if (interaction.isStringSelectMenu()) {
+      if (interaction.customId !== "ticket_type_select") return;
+      return openTicket(interaction, TICKET_TYPES[interaction.values[0]]);
     }
 
     if (interaction.isUserSelectMenu()) {
       if (
-        interaction.customId ===
-        "ticket_add_user_select"
-      ) {
-        const userId = interaction.values[0];
+        interaction.customId !== "ticket_add_user_select" &&
+        interaction.customId !== "ticket_remove_user_select"
+      ) return;
 
+      const claimedById = getTicketClaimedBy(interaction.channel);
+
+      if (!claimedById) {
+        return interaction.reply({
+          content: "❌ הטיקט לא נמצא כרגע ב־Claim.",
+          ephemeral: true
+        });
+      }
+
+      if (interaction.user.id !== claimedById) {
+        return interaction.reply({
+          content: "❌ רק מי שלקח את הטיקט יכול להוסיף או להסיר משתמשים.",
+          ephemeral: true
+        });
+      }
+
+      const selectedUser = interaction.users.first();
+      const ticketOwnerId = getTicketOwner(interaction.channel);
+
+      if (interaction.customId === "ticket_add_user_select") {
         await interaction.channel.permissionOverwrites.edit(
-          userId,
+          selectedUser.id,
           {
             ViewChannel: true,
             SendMessages: true,
             ReadMessageHistory: true
-          }
+          },
+          { reason: `Added to ticket by ${interaction.user.tag}` }
         );
 
         return interaction.update({
-          content:
-            `✅ <@${userId}> נוסף לטיקט.`,
+          content: `✅ ${selectedUser} נוסף לטיקט.`,
           components: []
         });
       }
 
-      if (
-        interaction.customId ===
-        "ticket_remove_user_select"
-      ) {
-        const userId = interaction.values[0];
-        const ownerId =
-          getTicketOwnerId(interaction.channel);
-        const claimedId =
-          getTicketClaimedById(interaction.channel);
-
-        if (
-          userId === ownerId ||
-          userId === claimedId
-        ) {
-          return interaction.update({
-            content:
-              "❌ אי אפשר להסיר את המשתמש הזה.",
-            components: []
-          });
-        }
-
-        const member =
-          await interaction.guild.members
-            .fetch(userId)
-            .catch(() => null);
-
-        if (
-          member?.roles.cache.has(
-            config.ticketStaffRoleId
-          )
-        ) {
-          return interaction.update({
-            content:
-              "❌ אי אפשר להסיר Staff.",
-            components: []
-          });
-        }
-
-        await interaction.channel.permissionOverwrites
-          .delete(userId)
-          .catch(() => {});
-
+      if (selectedUser.id === ticketOwnerId) {
         return interaction.update({
-          content:
-            `✅ <@${userId}> הוסר מהטיקט.`,
+          content: "❌ אי אפשר להסיר את מי שפתח את הטיקט.",
           components: []
         });
       }
+
+      if (selectedUser.id === claimedById) {
+        return interaction.update({
+          content: "❌ אי אפשר להסיר את מי שלקח את הטיקט.",
+          components: []
+        });
+      }
+
+      const selectedMember = await interaction.guild.members
+        .fetch(selectedUser.id)
+        .catch(() => null);
+
+      if (selectedMember?.roles.cache.has(config.ticketStaffRoleId)) {
+        return interaction.update({
+          content: "❌ אי אפשר להסיר איש צוות מהטיקט.",
+          components: []
+        });
+      }
+
+      await interaction.channel.permissionOverwrites
+        .delete(
+          selectedUser.id,
+          `Removed from ticket by ${interaction.user.tag}`
+        )
+        .catch(() => null);
+
+      return interaction.update({
+        content: `✅ ${selectedUser} הוסר מהטיקט.`,
+        components: []
+      });
+    }
+
+    if (!interaction.isButton()) return;
+
+    if (interaction.customId.startsWith("take_help_request:")) {
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content: "❌ רק צוות יכול לקחת בקשות עזרה.",
+          ephemeral: true
+        });
+      }
+
+      const [, requesterId, requestId] = interaction.customId.split(":");
+      const requester = await interaction.guild.members.fetch(requesterId).catch(() => null);
+      const reason = interaction.message.embeds[0]?.fields?.find(field => field.name === "סיבה:")?.value || "לא צוינה סיבה";
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`take_help_request:${requesterId}:${requestId}`)
+          .setLabel("בטיפול")
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(true)
+      );
+
+      return interaction.update({
+        embeds: [buildHelpRequestEmbed(requester || `<@${requesterId}>`, reason, requestId, interaction.user)],
+        components: [row]
+      });
+    }
+
+    if (interaction.customId === "open_ticket_select") {
+      const row = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId("ticket_type_select")
+          .setPlaceholder("בחר סוג טיקט")
+          .addOptions(
+            new StringSelectMenuOptionBuilder()
+              .setLabel("תלונה על ממבר/חבר צוות")
+              .setEmoji("⚠️")
+              .setValue("complaint"),
+            new StringSelectMenuOptionBuilder()
+              .setLabel("שאלה כללית")
+              .setEmoji({ id: "1515677093604622418" })
+              .setValue("question"),
+            new StringSelectMenuOptionBuilder()
+              .setLabel("זכייה בהגרלה")
+              .setEmoji("🎁")
+              .setValue("giveaway"),
+            new StringSelectMenuOptionBuilder()
+              .setLabel("עזרה כללית")
+              .setEmoji("🔔")
+              .setValue("general_help"),
+            new StringSelectMenuOptionBuilder()
+              .setLabel("בחינה לצוות")
+              .setEmoji({ id: "807709273134989324" })
+              .setValue("staff_test"),
+            new StringSelectMenuOptionBuilder()
+              .setLabel("אחר")
+              .setEmoji("📩")
+              .setValue("other")
+          )
+      );
+
+      return interaction.reply({
+        content: "בחר את סוג הטיקט:",
+        components: [row],
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "claim_sales_ticket") {
+      if (!isTicketStaff(interaction.member)) {
+        return interaction.reply({
+          content: "❌ רק צוות יכול לקחת טיקטים.",
+          ephemeral: true
+        });
+      }
+
+      const alreadyClaimedBy = getTicketClaimedBy(interaction.channel);
+
+      if (alreadyClaimedBy) {
+        return interaction.reply({
+          content: `❌ הטיקט כבר נלקח על ידי <@${alreadyClaimedBy}>.`,
+          ephemeral: true
+        });
+      }
+
+      await setTicketClaimedBy(interaction.channel, interaction.user.id);
+
+      await interaction.update({
+        components: [buildTicketButtons(interaction.user.id)]
+      });
+
+      return interaction.channel.send(
+        `🙋 הטיקט נלקח על ידי <@${interaction.user.id}>`
+      ).catch(() => {});
+    }
+
+    if (interaction.customId === "release_sales_ticket") {
+      const claimedById = getTicketClaimedBy(interaction.channel);
+
+      if (!claimedById) {
+        return interaction.reply({
+          content: "❌ הטיקט כבר משוחרר.",
+          ephemeral: true
+        });
+      }
+
+      if (interaction.user.id !== claimedById) {
+        return interaction.reply({
+          content: "❌ רק מי שלקח את הטיקט יכול לשחרר אותו.",
+          ephemeral: true
+        });
+      }
+
+      await setTicketClaimedBy(interaction.channel, null);
+
+      await interaction.update({
+        components: [buildTicketButtons()]
+      });
+
+      return interaction.channel.send(
+        `🔓 <@${interaction.user.id}> שחרר את הטיקט. עכשיו איש צוות אחר יכול לקחת אותו.`
+      ).catch(() => {});
+    }
+
+    if (interaction.customId === "add_user_sales_ticket") {
+      const claimedById = getTicketClaimedBy(interaction.channel);
+
+      if (!claimedById || interaction.user.id !== claimedById) {
+        return interaction.reply({
+          content: "❌ רק מי שלקח את הטיקט יכול להוסיף משתמשים.",
+          ephemeral: true
+        });
+      }
+
+      const row = new ActionRowBuilder().addComponents(
+        new UserSelectMenuBuilder()
+          .setCustomId("ticket_add_user_select")
+          .setPlaceholder("בחר משתמש להוסיף לטיקט")
+          .setMinValues(1)
+          .setMaxValues(1)
+      );
+
+      return interaction.reply({
+        content: "➕ בחר משתמש להוסיף לטיקט:",
+        components: [row],
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "remove_user_sales_ticket") {
+      const claimedById = getTicketClaimedBy(interaction.channel);
+
+      if (!claimedById || interaction.user.id !== claimedById) {
+        return interaction.reply({
+          content: "❌ רק מי שלקח את הטיקט יכול להסיר משתמשים.",
+          ephemeral: true
+        });
+      }
+
+      const row = new ActionRowBuilder().addComponents(
+        new UserSelectMenuBuilder()
+          .setCustomId("ticket_remove_user_select")
+          .setPlaceholder("בחר משתמש להסיר מהטיקט")
+          .setMinValues(1)
+          .setMaxValues(1)
+      );
+
+      return interaction.reply({
+        content: "➖ בחר משתמש להסיר מהטיקט:",
+        components: [row],
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "close_sales_ticket") {
+      if (!isTicketStaff(interaction.member)) {
+        return interaction.reply({
+          content: "❌ רק צוות יכול לסגור טיקטים.",
+          ephemeral: true
+        });
+      }
+
+      const logsChannel = interaction.guild.channels.cache.get(
+        config.ticketLogsChannelId
+      );
+
+      const transcriptFile = await createTicketTranscript(interaction.channel)
+        .catch(() => null);
+
+      if (logsChannel?.isTextBased()) {
+        await logsChannel.send({
+          content:
+`🔒 **Ticket Closed**
+
+🎫 טיקט: ${interaction.channel.name}
+📌 סוג: ${getTicketType(interaction.channel)}
+👤 נפתח על ידי: <@${getTicketOwner(interaction.channel)}>
+👤 נסגר על ידי: <@${interaction.user.id}>`,
+          files: transcriptFile ? [transcriptFile] : []
+        }).catch(() => {});
+      }
+
+      await interaction.reply("🔒 הטיקט ייסגר בעוד 5 שניות...");
+
+      setTimeout(() => {
+        interaction.channel.delete().catch(() => {});
+      }, 5000);
+
+      return;
+    }
+
+    if (interaction.customId === "start_verify") {
+      const correct = String(Math.floor(1000 + Math.random() * 9000));
+      const numbers = new Set([correct]);
+
+      while (numbers.size < 4) {
+        numbers.add(String(Math.floor(1000 + Math.random() * 9000)));
+      }
+
+      const shuffled = [...numbers].sort(() => Math.random() - 0.5);
+
+      const row = new ActionRowBuilder().addComponents(
+        shuffled.map(num =>
+          new ButtonBuilder()
+            .setCustomId(`verify:${interaction.user.id}:${correct}:${num}`)
+            .setLabel(num)
+            .setStyle(ButtonStyle.Secondary)
+        )
+      );
+
+      return interaction.reply({
+        content: `המספר שלך הוא: **${correct}**\nתלחץ על הכפתור עם המספר הזה.`,
+        components: [row],
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId.startsWith("verify:")) {
+      const [, userId, correct, picked] = interaction.customId.split(":");
+
+      if (interaction.user.id !== userId) {
+        return interaction.reply({
+          content: "זה לא ה־verify שלך 😭",
+          ephemeral: true
+        });
+      }
+
+      if (picked !== correct) {
+        return interaction.reply({
+          content: "לא נכון 💔 תלחץ שוב על Verify.",
+          ephemeral: true
+        });
+      }
+
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      const botMember = await interaction.guild.members.fetchMe();
+      const role = await interaction.guild.roles
+        .fetch(config.memberRoleId)
+        .catch(() => null);
+
+      if (!role) {
+        return interaction.update({
+          content: "האימות הצליח, אבל לא מצאתי את הרול. בדוק memberRoleId.",
+          components: []
+        });
+      }
+
+      if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+        return interaction.update({
+          content: "האימות הצליח, אבל לבוט אין Manage Roles.",
+          components: []
+        });
+      }
+
+      if (role.position >= botMember.roles.highest.position) {
+        return interaction.update({
+          content: "האימות הצליח, אבל רול הבוט חייב להיות מעל רול המאומת.",
+          components: []
+        });
+      }
+
+      await member.roles.add(role, "Verify completed");
+
+      return interaction.update({
+        content: "אומתת בהצלחה ✅ קיבלת את הרול!",
+        components: []
+      });
     }
   } catch (error) {
     console.error("❌ Interaction error:", error);
 
+    const response = {
+      content: "❌ הייתה שגיאה בביצוע הפעולה.",
+      ephemeral: true
+    };
+
     if (interaction.replied || interaction.deferred) {
-      return interaction.followUp({
-        content:
-          "❌ הייתה שגיאה בביצוע הפעולה.",
-        ephemeral: true
-      }).catch(() => {});
+      return interaction.followUp(response).catch(() => {});
     }
 
-    return interaction.reply({
-      content:
-        "❌ הייתה שגיאה בביצוע הפעולה.",
-      ephemeral: true
-    }).catch(() => {});
+    return interaction.reply(response).catch(() => {});
   }
 });
 
 if (!process.env.TOKEN) {
-  console.log(
-    "❌ TOKEN missing in .env — הבוט לא יכול להתחבר."
-  );
+  console.error("❌ TOKEN missing in .env");
   process.exit(1);
 }
 
-console.log("🔄 Connecting to Discord...");
-
-client.login(process.env.TOKEN)
-  .then(() => {
-    console.log("✅ Login request sent successfully.");
-  })
-  .catch(error => {
-    console.error("❌ Login failed:", error);
-    process.exit(1);
-  });
+client.login(process.env.TOKEN);
